@@ -1,0 +1,496 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>NYC Nonprofit Search — EIN (exact) / NAME (SoftTF-IDF + Jaro–Winkler)</title>
+<style>
+  :root {
+    --bg: #0b1220; --panel: #0f172a; --muted: #94a3b8; --text: #e5e7eb;
+    --accent: #22c55e; --accent-2: #60a5fa; --chip: #111827; --border: #1f2937; --warn: #f59e0b; --shadow: rgba(0,0,0,.25);
+  }
+  html, body { height:100%; background: linear-gradient(180deg,#0b1220,#0f172a); color:var(--text);
+    font: 15px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Inter, "Helvetica Neue", Arial, "Apple Color Emoji","Segoe UI Emoji"; }
+  .wrap { max-width: 1200px; margin: 28px auto; padding: 0 16px; }
+  header { display:flex; gap:16px; align-items:center; margin-bottom:16px; }
+  header .brand { font-weight:700; }
+  nav a { color:#a5b4fc; text-decoration:none; padding:6px 10px; border:1px solid var(--border); border-radius:999px; background:#0b1020; }
+  nav a.active { background:#1e293b; }
+  .sub { color: var(--muted); margin-bottom: 10px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 8px 24px var(--shadow); padding: 14px; }
+  .row { display:flex; flex-wrap:wrap; gap:12px; align-items:end; }
+  .field { display:grid; gap:6px; min-width: 220px; }
+  .field label { font-size:12px; color: var(--muted); }
+  input[type="text"], input[type="number"] {
+    background:#0b1020; color:var(--text); border:1px solid var(--border); border-radius:10px; padding:10px 12px; outline:none; min-width:260px;
+  }
+  .chip { display:inline-flex; align-items:center; gap:8px; background:var(--chip); border:1px solid var(--border); color:var(--muted);
+    border-radius:999px; padding:6px 10px; font-size:12px; }
+  .btn { background: linear-gradient(180deg,#22c55e,#16a34a); color:#0a0f1e; border:none; border-radius:12px; padding:10px 14px; font-weight:700; cursor:pointer;
+    box-shadow: 0 6px 16px rgba(34,197,94,.25); transition: transform .05s ease-in-out, filter .15s; }
+  .btn.secondary { background:#0b1020; color:var(--text); border:1px solid var(--border); box-shadow:none; }
+  .btn:hover { filter: brightness(1.05); } .btn:active { transform: translateY(1px) scale(.995); } .btn[disabled]{opacity:.5;cursor:not-allowed;}
+  .status { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin-top:10px; color: var(--muted); font-size:13px; }
+  progress { width:240px; height:10px; border:1px solid var(--border); border-radius:999px; overflow:hidden; background:#0b1020; }
+  progress::-webkit-progress-bar { background:#0b1020; } progress::-webkit-progress-value { background:var(--accent-2); } progress::-moz-progress-bar { background:var(--accent-2); }
+  table { width:100%; border-collapse:collapse; margin-top:12px; border:1px solid var(--border); border-radius:14px; overflow:hidden; }
+  thead th { position:sticky; top:0; background:#0b1020; color:#9ca3af; font-weight:600; text-align:left; font-size:12px; padding:10px; border-bottom:1px solid var(--border); cursor:pointer; user-select:none; }
+  tbody td { padding:10px; border-bottom:1px solid var(--border); vertical-align:top; font-size:13px; }
+  tbody tr:hover { background: rgba(96,165,250,.06); }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+  mark { background: rgba(34,197,94,.18); color: inherit; padding: 0 2px; border-radius: 4px; }
+  .hint { font-size: 12px; color: var(--muted); }
+  .right { margin-left:auto; }
+  .footer { margin: 12px 0 2px; color: var(--muted); font-size: 12px; }
+  .hide { display:none; }
+  /* Docs page */
+  #page-docs h2{margin:0 0 8px;font-size:18px}
+  #page-docs code, pre{background:#0b1020;border:1px solid var(--border);border-radius:10px;padding:10px;display:block;color:#e2e8f0;overflow:auto}
+  #page-docs table{margin-top:8px}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="brand">NYC Nonprofit Search</div>
+      <nav>
+        <a href="#/search" id="nav-search" class="active">Search</a>
+        <a href="#/api-docs" id="nav-docs">API Docs</a>
+      </nav>
+      <span class="chip right" id="apiStatus">API: initializing…</span>
+    </header>
+
+    <!-- SEARCH PAGE -->
+    <section id="page-search">
+      <div class="sub">Client-side matcher over <span class="mono">data.csv</span>. Search by <b>EIN</b> (exact) or <b>NAME</b> (SoftTF-IDF + Jaro–Winkler; optional phonetic recall). Results show a <b>confidence</b> score per item.</div>
+
+      <div class="card">
+        <div class="row">
+          <div class="field">
+            <label>Search field</label>
+            <div style="display:flex; gap:10px; align-items:center;">
+              <label class="chip"><input type="radio" name="mode" value="EIN" checked> <span class="mono">EIN</span> (exact)</label>
+              <label class="chip"><input type="radio" name="mode" value="NAME"> NAME (semantic)</label>
+            </div>
+          </div>
+
+          <div class="field" style="flex:1; min-width: 320px;">
+            <label id="q-label">Query <span class="hint">(9-digit EIN or org name)</span></label>
+            <input id="q" type="text" placeholder="e.g., 002022084 or 'Habitat for Humanity NYC'" autocomplete="off" />
+          </div>
+
+          <div class="field">
+            <label>Max results</label>
+            <input id="limit" type="number" value="50" min="1" max="500" />
+          </div>
+
+          <button id="go" class="btn" disabled>Search</button>
+          <button id="clear" class="btn secondary">Clear</button>
+          <button id="download" class="btn secondary right" disabled>Download matches CSV</button>
+        </div>
+
+        <details id="adv">
+          <summary>Advanced (candidate gen + scorer)</summary>
+          <div class="row" style="margin-top:8px;">
+            <div class="field">
+              <label>Top-K candidates (TF-IDF blocker)</label>
+              <input id="topk" type="number" value="80" min="10" max="1000" />
+            </div>
+            <div class="field">
+              <label>Token match threshold (Jaro–Winkler)</label>
+              <input id="tokThresh" type="number" value="0.85" min="0.5" max="0.98" step="0.01" />
+            </div>
+            <div class="field">
+              <label>Min SoftTF-IDF to show</label>
+              <input id="minSoft" type="number" value="0.00" min="0" max="1" step="0.01" />
+            </div>
+            <div class="field">
+              <label class="chip"><input id="usePhon" type="checkbox" checked> Enable phonetic fallback (NYSIIS)</label>
+            </div>
+          </div>
+        </details>
+
+        <div class="status" id="status">
+          <span id="loadStatus" class="chip">Loading <span class="mono">data.csv</span>…</span>
+          <progress id="progress" max="1" value="0" class="hide"></progress>
+          <span id="count" class="hint"></span>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top: 14px;">
+        <div class="row">
+          <div class="chip">Sort: click a column header</div>
+          <div class="chip">Scorer: SoftTF-IDF (token TF-IDF × JW) + small domain boosts</div>
+        </div>
+        <table id="tbl" class="hide" aria-live="polite">
+          <thead>
+            <tr>
+              <th data-key="EIN">EIN</th>
+              <th data-key="NAME">NAME</th>
+              <th data-key="CITY">CITY</th>
+              <th data-key="STATE">STATE</th>
+              <th data-key="ZIP">ZIP</th>
+              <th data-key="NTEE_CD">NTEE</th>
+              <th data-key="RULING">RULING</th>
+              <th data-key="ASSET_AMT">ASSETS</th>
+              <th data-key="INCOME_AMT">INCOME</th>
+              <th data-key="REVENUE_AMT">REVENUE</th>
+              <th data-key="_soft">SoftTF-IDF</th>
+              <th data-key="_jw">JW(full)</th>
+              <th data-key="_conf">CONF</th>
+              <th data-key="_hits">Hits</th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+        <div class="footer" id="footer"></div>
+      </div>
+    </section>
+
+    <!-- API DOCS PAGE -->
+    <section id="page-docs" class="hide">
+      <div class="card">
+        <h2>Search API</h2>
+        <div class="sub">A same-origin API implemented via a Service Worker. Supports <b>GET</b> or <b>POST</b>, returns JSON with top results (default 5). Include <b>confidence</b> (0–1), SoftTF-IDF, and Jaro–Winkler per item.</div>
+
+        <h3>Endpoints</h3>
+        <ul>
+          <li><code>GET /api/search?q=&lt;query&gt;&amp;field=name|ein&amp;limit=5&amp;topk=80&amp;tokThresh=0.85&amp;minSoft=0&amp;phonetic=true</code></li>
+          <li><code>POST /api/search</code> with JSON body using the same fields.</li>
+        </ul>
+
+        <h3>Parameters</h3>
+        <table>
+          <thead><tr><th>Param</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>q</code></td><td>string</td><td>–</td><td>Query text (org name) or EIN (9 digits for <code>field=ein</code>).</td></tr>
+            <tr><td><code>field</code></td><td>string</td><td><code>name</code></td><td><code>name</code> uses SoftTF-IDF+JW; <code>ein</code> is exact.</td></tr>
+            <tr><td><code>limit</code></td><td>int</td><td>5</td><td>Max items to return.</td></tr>
+            <tr><td><code>topk</code></td><td>int</td><td>80</td><td>Candidate count from TF-IDF blocker.</td></tr>
+            <tr><td><code>tokThresh</code></td><td>float</td><td>0.85</td><td>Min Jaro–Winkler for token matches in SoftTF-IDF.</td></tr>
+            <tr><td><code>minSoft</code></td><td>float</td><td>0</td><td>Min SoftTF-IDF to keep (after small boosts).</td></tr>
+            <tr><td><code>phonetic</code></td><td>bool</td><td>true</td><td>Use NYSIIS fallback when no lexical hits.</td></tr>
+          </tbody>
+        </table>
+
+        <h3>Responses</h3>
+        <p><b>200 OK</b></p>
+<pre>{
+  "meta": {
+    "query": "alzheimer nyc",
+    "field": "name",
+    "limit_requested": 5,
+    "limit_returned": 5,
+    "candidates_considered": 80,
+    "took_ms": 7,
+    "thresholds": {"topk":80,"tokThresh":0.85,"minSoft":0,"phonetic":true},
+    "corpus_size": 199873
+  },
+  "results": [
+    {
+      "rank": 1,
+      "ein": "01XXXXXXX",
+      "name": "ALZHEIMER'S ASSOCIATION GREATER NEW YORK CHAPTER",
+      "city": "NEW YORK", "state": "NY", "zip": "100XX",
+      "ntee": "H92",
+      "assets": 12345678, "income": 2345678, "revenue": 1987654,
+      "confidence": 0.964,
+      "soft_tfidf": 0.951,
+      "jw_full": 0.987,
+      "hits": 6,
+      "explain": {"numbersMatched":0,"rareTokenMatches":2}
+    }
+  ]
+}</pre>
+
+        <p><b>400</b> (missing <code>q</code> or bad params), <b>503</b> (index still warming).</p>
+
+        <h3>Examples</h3>
+<pre># GET (name, top 5 default)
+curl -G "http://localhost:8000/api/search" \
+  --data-urlencode "q=habitat for humanity nyc"
+
+# GET (ein)
+curl -G "http://localhost:8000/api/search" \
+  --data-urlencode "q=002022084" --data-urlencode "field=ein"
+
+# POST (JSON)
+curl -X POST "http://localhost:8000/api/search" \
+  -H "Content-Type: application/json" \
+  -d '{"q":"alzheimer new york","field":"name","limit":10,"topk":120,"tokThresh":0.86,"minSoft":0.1,"phonetic":true}'
+</pre>
+
+        <h3>Scoring & Confidence</h3>
+        <p>SoftTF-IDF sums TF-IDF-weighted token matches where within-token similarity ≥ <code>tokThresh</code> (Jaro–Winkler). We add small domain boosts for exact numbers (“PS 118”, “Chapter 12”) and rare token matches. <b>confidence</b> is a calibrated blend: <code>0.8×SoftTF-IDF + 0.2×JW(full)</code>, clipped to [0,1]. For EIN exact matches, confidence is 1.0.</p>
+      </div>
+    </section>
+  </div>
+
+<script>
+/* ---------- Simple hash router (single-file "subpages") ---------- */
+function setRoute() {
+  const hash = location.hash || '#/search';
+  document.querySelectorAll('nav a').forEach(a => a.classList.remove('active'));
+  if (hash.startsWith('#/api-docs')) {
+    document.getElementById('page-search').classList.add('hide');
+    document.getElementById('page-docs').classList.remove('hide');
+    document.getElementById('nav-docs').classList.add('active');
+  } else {
+    document.getElementById('page-docs').classList.add('hide');
+    document.getElementById('page-search').classList.remove('hide');
+    document.getElementById('nav-search').classList.add('active');
+  }
+}
+window.addEventListener('hashchange', setRoute);
+setRoute();
+
+/* ---------- CSV parsing ---------- */
+function parseCSV(text) {
+  const rows = []; let i=0, field='', row=[], inQ=false;
+  const pushF=()=>{row.push(field);field='';};
+  const pushR=()=>{rows.push(row);row=[];};
+  while(i<text.length){
+    const c=text[i];
+    if(inQ){ if(c=='"'){ if(text[i+1]=='"'){field+='"';i+=2;continue;} inQ=false;i++;continue; }
+              field+=c;i++;continue; }
+    if(c=='"'){inQ=true;i++;continue;}
+    if(c==','){pushF();i++;continue;}
+    if(c=='\r'){i++;continue;}
+    if(c=='\n'){pushF();pushR();i++;continue;}
+    field+=c;i++;
+  }
+  pushF(); if(row.length>1 || (row.length===1 && row[0]!=='')) pushR();
+  if(!rows.length) return {header:[],records:[]};
+  const header = rows[0].map(h=>h.trim());
+  const records = rows.slice(1).map(cols=>{const o={};for(let j=0;j<header.length;j++)o[header[j]]=(cols[j]??'').trim();return o;});
+  return {header,records};
+}
+
+/* ---------- Normalization & tokenization ---------- */
+const STOP = new Set(['INC','INCORPORATED','LLC','LTD','LIMITED','FOUNDATION','FUND','ASSOCIATION','SOCIETY','MINISTRY','MINISTRIES','CHURCH','CENTER','CENTRE','ORG','ORGANIZATION','NONPROFIT','THE','OF','FOR','AND','CO','COMPANY','CORP','CORPORATION','TRUST','CLUB','GROUP','BOARD','COMMITTEE','NFP','PC','PLC','A','AN']);
+const STOP_IDF = 0.05, RARE_IDF = 2.0;
+
+function normalizeText(s){ if(!s)return''; let t=s.normalize('NFKC'); t=t.replace(/&/g,' and '); t=t.normalize('NFD').replace(/[\u0300-\u036f]/g,''); t=t.toUpperCase(); t=t.replace(/[^\w\s]/g,' '); t=t.replace(/\s+/g,' ').trim(); return t; }
+function tokenSynonym(tok){ if(tok==='ST')return'SAINT'; if(tok==='STS')return'SAINTS'; return tok; }
+function tokenizeName(name){ const norm=normalizeText(name); const raw=norm.split(' ').filter(Boolean); const out=[]; for(let t of raw){t=tokenSynonym(t); if(t) out.push(t);} return out; }
+const isNumberToken=t=>/^\d+$/.test(t);
+const normalizeEIN=s=>(s||'').replace(/\D/g,'');
+
+/* ---------- Jaro/Jaro–Winkler ---------- */
+function jaro(s,a){ if(s===a)return 1; const sl=s.length, al=a.length; if(!sl||!al)return 0; const md=Math.max(0,Math.floor(Math.max(sl,al)/2)-1);
+  const sm=new Array(sl).fill(false), am=new Array(al).fill(false); let m=0,tr=0;
+  for(let i=0;i<sl;i++){ const st=Math.max(0,i-md), en=Math.min(i+md+1,al); for(let j=st;j<en;j++){ if(am[j])continue; if(s[i]!==a[j])continue; sm[i]=true; am[j]=true; m++; break; } }
+  if(!m)return 0; let k=0; for(let i=0;i<sl;i++){ if(!sm[i])continue; while(!am[k])k++; if(s[i]!==a[k])tr++; k++; } tr/=2;
+  return (m/sl + m/al + (m-tr)/m)/3;
+}
+function jaroWinkler(s,a,p=0.1,maxL=4){ if(s===a)return 1; const j=jaro(s,a); let l=0; const L=Math.min(maxL,s.length,a.length); while(l<L && s[l]===a[l])l++; return j + l*p*(1-j); }
+
+/* ---------- NYSIIS (phonetic) ---------- */
+function nysiis(str){ if(!str)return''; let s=str.toUpperCase().replace(/[^A-Z]/g,''); if(!s)return''; s=s.replace(/^MAC/,'MCC').replace(/^KN/,'NN').replace(/^K/,'C').replace(/^PH|^PF/,'FF').replace(/^SCH/,'SSS').replace(/EE$|IE$/,'Y').replace(/DT$|RT$|RD$|NT$|ND$/,'D');
+  let out=s[0]; for(let i=1;i<s.length;i++){ let c=s[i], prev=s[i-1]; if('AEIOU'.includes(c))c='A'; else if(c==='Q')c='G'; else if(c==='Z')c='S'; else if(c==='M')c='N'; else if(c==='K')c=(i+1<s.length && s[i+1]==='N')?'N':'C'; else if(c==='S'&&s[i+1]==='C'&&s[i+2]==='H'){c='S';} else if(c==='P'&&s[i+1]==='H'){c='F';} else if(c==='H'){const a='AEIOU'.includes(prev)?prev:''; const b=(i+1<s.length && 'AEIOU'.includes(s[i+1]))?s[i+1]:''; c=(a&&b)?'H':prev;} if(c!==out[out.length-1])out+=c; }
+  out=out.replace(/S$/,'').replace(/A$/,'').replace(/AY$/,'Y'); return out;
+}
+
+/* ---------- SoftTF-IDF ---------- */
+function softTfIdfScore(qTokens,dTokens,idf,tokThresh,qWeights,dWeights){
+  let sum=0,hits=0;
+  for(const qt of qTokens){ const wq=qWeights.get(qt)||0; if(wq<=0)continue; let best=0;
+    for(const dt of dTokens){ const wd=dWeights.get(dt)||0; if(wd<=0)continue; const s=jaroWinkler(qt,dt); if(s>=tokThresh && s>best) best=s; }
+    if(best>0){ sum+=wq*best; hits++; }
+  }
+  let q2=0; for(const [,w] of qWeights) q2+=w*w;
+  let d2=0; for(const [,w] of dWeights) d2+=w*w;
+  const denom=Math.sqrt(q2)*Math.sqrt(d2); if(!denom) return {score:0,hits:0};
+  let score=sum/denom; if(score>1)score=1; return {score,hits};
+}
+
+/* ---------- App state ---------- */
+const state = { header:[], data:[], docs:[], df:new Map(), idf:new Map(), postings:new Map(), phonetic:new Map(), docNorm:[], lastResults:[], sortKey:'_soft', sortDir:'desc' };
+
+/* ---------- Build index ---------- */
+function buildIndex(records){
+  const docs=[], df=new Map(), postings=new Map(), phonetic=new Map();
+  records.forEach((r,idx)=>{
+    const tokens=tokenizeName(r.NAME||''); const tf=new Map(); const numbers=new Set();
+    for(const t of tokens){ tf.set(t,(tf.get(t)||0)+1); if(isNumberToken(t)) numbers.add(t); }
+    const seen=new Set(tf.keys()); for(const t of seen){ df.set(t,(df.get(t)||0)+1); }
+    const phSet=new Set(); for(const t of seen){ if(isNumberToken(t)||STOP.has(t)) continue; const key=nysiis(t); if(!key) continue; phSet.add(key); if(!phonetic.has(key)) phonetic.set(key,new Set()); phonetic.get(key).add(idx); }
+    docs.push({ id:idx, row:r, nameNorm:normalizeText(r.NAME||''), tokens, tf, numbers, phonKeys:phSet });
+  });
+  const N=docs.length, idf=new Map();
+  for(const [t,d] of df.entries()) idf.set(t, STOP.has(t)?STOP_IDF : Math.log((N+1)/(d+1))+1 );
+  for(const d of docs){ for(const [t,tfv] of d.tf.entries()){ if(!postings.has(t)) postings.set(t,[]); postings.get(t).push({id:d.id, tf:tfv}); } }
+  const docNorm=new Array(docs.length).fill(0);
+  for(const d of docs){ let s2=0; for(const [t,tfv] of d.tf.entries()){ const w=(1+Math.log(tfv))*(idf.get(t)||0); s2+=w*w; } docNorm[d.id]=Math.sqrt(s2); }
+  Object.assign(state,{docs,df,idf,postings,phonetic,docNorm});
+}
+
+/* ---------- Candidate generation ---------- */
+function getCandidates(queryTokens, topK){
+  const idf=state.idf, postings=state.postings, qtf=new Map();
+  for(const t of queryTokens) qtf.set(t,(qtf.get(t)||0)+1);
+  const qW=new Map(); let q2=0;
+  for(const [t,tfv] of qtf.entries()){ const w=(1+Math.log(tfv))*(idf.get(t)||0); qW.set(t,w); q2+=w*w; }
+  const qNorm=Math.sqrt(q2)||1;
+  const acc=new Map();
+  for(const [t,wq] of qW.entries()){ const pl=postings.get(t); if(!pl)continue; const idf_t=idf.get(t)||0;
+    for(const {id,tf} of pl){ const wd=(1+Math.log(tf))*idf_t; acc.set(id,(acc.get(id)||0)+wq*wd); } }
+  const c=[]; for(const [id,dot] of acc.entries()){ const denom=qNorm*(state.docNorm[id]||1); const cos=denom?(dot/denom):0; c.push({id,score:cos}); }
+  c.sort((a,b)=>b.score-a.score); return c.slice(0,topK).map(x=>x.id);
+}
+function phoneticCandidates(queryTokens){
+  const keys=new Set(); for(const t of queryTokens){ if(isNumberToken(t)||STOP.has(t)) continue; const k=nysiis(t); if(k) keys.add(k); }
+  const ids=new Set(); for(const k of keys){ const set=state.phonetic.get(k); if(!set) continue; for(const id of set) ids.add(id); }
+  return Array.from(ids);
+}
+
+/* ---------- UI: render & sort ---------- */
+const $=s=>document.querySelector(s), $$=s=>Array.from(document.querySelectorAll(s));
+const fmtNum=v=>{ if(v===''||v==null)return''; const n=Number(v); return Number.isFinite(n)?n.toLocaleString():v; };
+function renderStatus(t,c=''){ $('#loadStatus').textContent=t; $('#count').textContent=c; }
+function highlightName(name,q){ if(!q)return String(name).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m])); const N=normalizeText(name), Q=normalizeText(q); if(Q && N.includes(Q) && Q.length>=3) return `<mark>${name.replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]))}</mark>`; return name.replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m])); }
+function renderTable(items){
+  const tbody=$('#tbody'), table=$('#tbl'); tbody.innerHTML='';
+  if(!items||!items.length){ table.classList.add('hide'); $('#footer').textContent='No results.'; $('#download').disabled=true; return; }
+  const frag=document.createDocumentFragment();
+  for(const it of items){
+    const r=it.row;
+    const tr=document.createElement('tr');
+    const cells=[
+      ['EIN', `<span class="mono">${r.EIN||''}</span>`],
+      ['NAME', highlightName(r.NAME||'', $('#q').value)],
+      ['CITY', r.CITY||''],['STATE', r.STATE||''],['ZIP', r.ZIP||''],['NTEE_CD', r.NTEE_CD||''],['RULING', r.RULING||''],
+      ['ASSET_AMT', fmtNum(r.ASSET_AMT)],['INCOME_AMT', fmtNum(r.INCOME_AMT)],['REVENUE_AMT', fmtNum(r.REVENUE_AMT)],
+      ['_soft', it._soft!=null?it._soft.toFixed(3):''], ['_jw', it._jw!=null?it._jw.toFixed(3):''],
+      ['_conf', it._conf!=null?it._conf.toFixed(3):''], ['_hits', String(it._hits||0)],
+    ];
+    for(const [,html] of cells){ const td=document.createElement('td'); td.innerHTML=html; tr.appendChild(td); }
+    frag.appendChild(tr);
+  }
+  tbody.appendChild(frag); table.classList.remove('hide');
+  $('#footer').textContent = `${items.length.toLocaleString()} result(s)`;
+  $('#download').disabled=false;
+}
+$$('thead th').forEach(th=>th.addEventListener('click',()=>{
+  const key=th.dataset.key; state.sortDir=(state.sortKey===key && state.sortDir==='asc')?'desc':'asc'; state.sortKey=key;
+  const rows=state.lastResults.slice();
+  rows.sort((a,b)=>{
+    const va=key.startsWith('_')?a[key]:a.row[key]; const vb=key.startsWith('_')?b[key]:b.row[key];
+    const numeric=['ASSET_AMT','INCOME_AMT','REVENUE_AMT','_soft','_jw','_conf','_hits'].includes(key);
+    if(numeric){ const na=Number(va||0), nb=Number(vb||0); return state.sortDir==='asc'?na-nb:nb-na; }
+    const sa=String(va??'').toUpperCase(), sb=String(vb??'').toUpperCase();
+    return state.sortDir==='asc' ? (sa<sb?-1:sa>sb?1:0) : (sa<sb?1:sa>sb?-1:0);
+  }); state.lastResults=rows; renderTable(rows);
+}));
+
+/* ---------- Search handler ---------- */
+async function runSearch(){
+  const mode=document.querySelector('input[name="mode"]:checked').value;
+  const q=$('#q').value.trim();
+  const limit=Math.max(1,Math.min(500, Number($('#limit').value)||50));
+  if(!q){ state.lastResults=[]; renderTable([]); return; }
+
+  if(mode==='EIN'){
+    const target=normalizeEIN(q);
+    const found=state.data.filter(r=>normalizeEIN(r.EIN)===target).map(r=>({row:r,_soft:1,_jw:1,_conf:1,_hits:1}));
+    state.lastResults=found.slice(0,limit);
+    $('#progress').classList.add('hide'); renderTable(state.lastResults); renderStatus('EIN exact match complete', `${found.length} matched`);
+    return;
+  }
+
+  const topK=Math.max(10,Math.min(1000, Number($('#topk').value)||80));
+  const tokThresh=Math.max(0.5,Math.min(0.98, Number($('#tokThresh').value)||0.85));
+  const minSoft=Math.max(0,Math.min(1, Number($('#minSoft').value)||0));
+  const usePhon=$('#usePhon').checked;
+
+  const queryTokensRaw=tokenizeName(q);
+  const queryTokensBlk=queryTokensRaw.filter(t=>!STOP.has(t));
+  let candIds=getCandidates(queryTokensBlk.length?queryTokensBlk:queryTokensRaw, topK);
+  if(candIds.length===0 && usePhon) candIds=phoneticCandidates(queryTokensRaw);
+
+  const progress=$('#progress'); progress.classList.remove('hide'); progress.max=candIds.length||1; progress.value=0;
+
+  const qtf=new Map(); for(const t of queryTokensRaw) qtf.set(t,(qtf.get(t)||0)+1);
+  const qWeights=new Map(); for(const [t,tfv] of qtf.entries()){ const w=(1+Math.log(tfv))*(state.idf.get(t)||0); qWeights.set(t,w); }
+  const qNumbers=new Set(queryTokensRaw.filter(isNumberToken));
+
+  const results=[]; let i=0;
+  function processChunk(){
+    const end=Math.min(i+200, candIds.length);
+    for(;i<end;i++){
+      const id=candIds[i], d=state.docs[id];
+      const dWeights=new Map(); for(const [t,tfv] of d.tf.entries()){ const w=(1+Math.log(tfv))*(state.idf.get(t)||0); dWeights.set(t,w); }
+      const {score:softScore, hits}=softTfIdfScore(queryTokensRaw, d.tokens, state.idf, tokThresh, qWeights, dWeights);
+      let boost=0, numHits=0, rareHits=0;
+      for(const n of qNumbers) if(d.numbers.has(n)) numHits++; boost+=Math.min(0.06, 0.02*numHits);
+      for(const t of qtf.keys()) if(d.tf.has(t) && (state.idf.get(t)||0)>=RARE_IDF) rareHits++; boost+=Math.min(0.03, 0.01*rareHits);
+      const soft=Math.min(1, softScore + boost);
+      const jwFull=jaroWinkler(normalizeText(q), d.nameNorm);
+      const conf=Math.max(0, Math.min(1, 0.8*soft + 0.2*jwFull));
+      if(soft>=minSoft || results.length<limit){
+        results.push({row:d.row,_soft:soft,_jw:jwFull,_conf:conf,_hits:hits+numHits+rareHits});
+      }
+    }
+    progress.value=i;
+    if(i<candIds.length){ (performance.now()%2?requestAnimationFrame:setTimeout)(processChunk,0); }
+    else { results.sort((a,b)=>(b._soft-a._soft)||(b._jw-a._jw)); state.lastResults=results.slice(0,limit); progress.classList.add('hide'); renderTable(state.lastResults); renderStatus('NAME semantic match complete', `${candIds.length} candidate(s), showing top ${state.lastResults.length}`); }
+  }
+  processChunk();
+}
+
+/* ---------- Download CSV ---------- */
+function toCSV(rows){
+  if(!rows||!rows.length) return '';
+  const header = state.header && state.header.length ? state.header : Object.keys(rows[0].row);
+  const esc=v=>{ if(v==null)return''; const s=String(v); return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s; };
+  const lines=[]; lines.push([...header,'SoftTFIDF','JW_full','Confidence','Hits'].join(','));
+  for(const it of rows){ const r=it.row; const base=header.map(k=>esc(r[k])); base.push(it._soft?.toFixed(3)||'', it._jw?.toFixed(3)||'', it._conf?.toFixed(3)||'', String(it._hits||0)); lines.push(base.join(',')); }
+  return lines.join('\n');
+}
+function downloadCSV(filename, rows){
+  const blob=new Blob([toCSV(rows)],{type:'text/csv;charset=utf-8;'}); const url=URL.createObjectURL(blob);
+  const a=document.createElement('a'); a.href=url; a.download=filename; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+}
+
+/* ---------- Wiring ---------- */
+$('#go').addEventListener('click', runSearch);
+$('#q').addEventListener('keydown', e=>{ if(e.key==='Enter') runSearch(); });
+$('#clear').addEventListener('click', ()=>{ $('#q').value=''; state.lastResults=[]; renderTable([]); $('#progress').classList.add('hide'); $('#footer').textContent=''; });
+$('#download').addEventListener('click', ()=>downloadCSV(`matches_${new Date().toISOString().slice(0,10)}.csv`, state.lastResults));
+$$('input[name="mode"]').forEach(r=>r.addEventListener('change',()=>{
+  const mode=document.querySelector('input[name="mode"]:checked').value;
+  if(mode==='EIN'){ $('#q').placeholder='e.g., 002022084'; $('#q-label').innerHTML='Query <span class="hint">(9-digit EIN, exact match)</span>'; }
+  else { $('#q').placeholder="e.g., 'Alzheimer Association NYC'"; $('#q-label').innerHTML='Query <span class="hint">(organization NAME; token-aware)</span>'; }
+}));
+
+/* ---------- Load CSV & build indices ---------- */
+(async function init(){
+  try{
+    const res=await fetch('data.csv',{cache:'no-store'}); if(!res.ok) throw new Error(`HTTP ${res.status}`);
+    const text=await res.text(); const {header,records}=parseCSV(text);
+    state.header=header; state.data=records; renderStatus('Indexing…',''); await new Promise(requestAnimationFrame);
+    buildIndex(records); $('#go').disabled=false; renderStatus('Ready', `${records.length.toLocaleString()} records indexed`);
+  }catch(err){ renderStatus('Failed to load data.csv',''); console.error(err); }
+})();
+
+/* ---------- Service Worker registration (implements the API) ---------- */
+(async function bootSW(){
+  const el = document.getElementById('apiStatus');
+  if(!('serviceWorker' in navigator)){ el.textContent='API: unavailable (no SW)'; return; }
+  try{
+    const reg = await navigator.serviceWorker.register('./sw.js');
+    const setState= async ()=>{
+      // light health check (optional)
+      try {
+        const u = new URL('./api/search', location.href);
+        u.searchParams.set('q','__ping__'); u.searchParams.set('limit','0');
+        const r = await fetch(u.toString(), {method:'GET'}); el.textContent = r.ok ? 'API: online' : 'API: initializing…';
+      } catch { el.textContent='API: initializing…'; }
+    };
+    navigator.serviceWorker.addEventListener('controllerchange', setState);
+    setState();
+  }catch(e){ el.textContent='API: failed to register'; console.error(e); }
+})();
+</script>
+</body>
+</html>
